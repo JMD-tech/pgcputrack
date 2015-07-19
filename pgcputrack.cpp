@@ -80,6 +80,21 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
+// Handle exit event
+void handle_exit_ev(pid_t pid)
+{
+	pid_t spid[2]={pid,0};
+	PROCTAB* proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_PID, spid);
+	
+	proc_t *proc_info;
+	if ((proc_info=readproc(proc, 0)))
+	{
+		printf("exit: PID %u, PPID %u, time=%llu\n",pid,proc_info->ppid,proc_info->utime+proc_info->stime);
+		freeproc(proc_info);
+	}
+	closeproc(proc);
+}
+
 /*
  * handle a single process event
  */
@@ -107,17 +122,18 @@ static int handle_proc_ev(int nl_sock)
         }
         switch (nlcn_msg.proc_ev.what) {
             case proc_event::PROC_EVENT_FORK:
-                printf("fork: parent tid=%d pid=%d -> child tid=%d pid=%d\n",
+/*                printf("fork: parent tid=%d pid=%d -> child tid=%d pid=%d\n",
                         nlcn_msg.proc_ev.event_data.fork.parent_pid,
                         nlcn_msg.proc_ev.event_data.fork.parent_tgid,
                         nlcn_msg.proc_ev.event_data.fork.child_pid,
-                        nlcn_msg.proc_ev.event_data.fork.child_tgid);
+                        nlcn_msg.proc_ev.event_data.fork.child_tgid); */
                 break;
             case proc_event::PROC_EVENT_EXIT:
-                printf("exit: tid=%d pid=%d exit_code=%d\n",
+/*                printf("exit: tid=%d pid=%d exit_code=%d\n",
                         nlcn_msg.proc_ev.event_data.exit.process_pid,
                         nlcn_msg.proc_ev.event_data.exit.process_tgid,
-                        nlcn_msg.proc_ev.event_data.exit.exit_code);
+                        nlcn_msg.proc_ev.event_data.exit.exit_code); */
+				handle_exit_ev(nlcn_msg.proc_ev.event_data.exit.process_pid);
                 break;
 			default:
 				break;

@@ -1,5 +1,5 @@
 
-LDFLAGS+= -s
+LDFLAGS+= -lprocps -s
 
 default: all
 
