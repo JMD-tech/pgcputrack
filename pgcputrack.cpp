@@ -7,6 +7,7 @@
 #include <linux/netlink.h>
 #include <linux/connector.h>
 #include <linux/cn_proc.h>
+#include <proc/readproc.h>
 #include <signal.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -118,6 +119,8 @@ static int handle_proc_ev(int nl_sock)
                         nlcn_msg.proc_ev.event_data.exit.process_tgid,
                         nlcn_msg.proc_ev.event_data.exit.exit_code);
                 break;
+			default:
+				break;
         }
     }
 
