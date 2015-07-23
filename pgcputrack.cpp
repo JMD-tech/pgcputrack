@@ -1,7 +1,6 @@
 // Heavily based on Bewareofgeek's excellent pmon.c
 // Original file at: http://bewareofgeek.livejournal.com/2945.html
 // This file is licensed under the GPL v2 (http://www.gnu.org/licenses/gpl2.txt)
-// (some parts was originally borrowed from proc events example)
 
 #include <sys/socket.h>
 #include <linux/netlink.h>
@@ -80,17 +79,31 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
-// Handle exit event
-void handle_exit_ev(pid_t pid)
+// On fork event, we add the process to the list of processes to monitor,
+//  and store the starting time and initial command
+void handle_fork_ev(struct proc_event &proc_ev)
 {
-	pid_t spid[2]={pid,0};
+	// We check that both parent and child process command name is postgres
+	// proc_ev.event_data.exit.process_pid
+}
+
+// Handle exit event
+void handle_exit_ev(struct proc_event &proc_ev)
+{
+	static pid_t spid[2];//={pid,0};
+	spid[0]=proc_ev.event_data.exit.process_pid; spid[1]=0;
 	PROCTAB* proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_PID, spid);
 	
-	proc_t *proc_info;
-	if ((proc_info=readproc(proc, 0)))
+	static proc_t proc_info;
+	if (readproc(proc, &proc_info))
 	{
-		printf("exit: PID %u, PPID %u, time=%llu\n",pid,proc_info->ppid,proc_info->utime+proc_info->stime);
-		freeproc(proc_info);
+		//char *cmdline=(proc_info.cmdline?*proc_info.cmdline:proc_info.cmd);
+		//if (proc_info.cmdline) if (*proc_info.cmdline) cmdline=*proc_info.cmdline;
+		printf("PID %u, PPID %u, cmd=%s time=%llu\n",spid[0],proc_info.ppid,proc_info.cmd,proc_info.utime+proc_info.stime);
+		//if (proc_info.cmdline)
+		//	for (int argn=0;proc_info.cmdline[argn];++argn)
+		//		printf("%u %s\n",argn,proc_info.cmdline[argn]);
+		//freeproc(proc_info);
 	}
 	closeproc(proc);
 }
@@ -122,18 +135,12 @@ static int handle_proc_ev(int nl_sock)
         }
         switch (nlcn_msg.proc_ev.what) {
             case proc_event::PROC_EVENT_FORK:
-/*                printf("fork: parent tid=%d pid=%d -> child tid=%d pid=%d\n",
-                        nlcn_msg.proc_ev.event_data.fork.parent_pid,
-                        nlcn_msg.proc_ev.event_data.fork.parent_tgid,
-                        nlcn_msg.proc_ev.event_data.fork.child_pid,
-                        nlcn_msg.proc_ev.event_data.fork.child_tgid); */
+				printf("fork: ");
+				handle_fork_ev(nlcn_msg.proc_ev);
                 break;
             case proc_event::PROC_EVENT_EXIT:
-/*                printf("exit: tid=%d pid=%d exit_code=%d\n",
-                        nlcn_msg.proc_ev.event_data.exit.process_pid,
-                        nlcn_msg.proc_ev.event_data.exit.process_tgid,
-                        nlcn_msg.proc_ev.event_data.exit.exit_code); */
-				handle_exit_ev(nlcn_msg.proc_ev.event_data.exit.process_pid);
+				printf("exit: ");
+				handle_exit_ev(nlcn_msg.proc_ev);
                 break;
 			default:
 				break;
