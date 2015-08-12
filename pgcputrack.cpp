@@ -146,14 +146,9 @@ void handle_exit_ev(struct proc_event &proc_ev)
 	pgprocs.erase(pid);
 }
 
-/*
- * handle a single process event
- */
-static volatile bool need_exit = false;
+// handle a single process event
 static int handle_proc_ev(int nl_sock)
 {
-    int rc,rs; fd_set Rsocks; struct timeval timeout;
-	
     struct __attribute__ ((aligned(NLMSG_ALIGNTO))) {
         struct nlmsghdr nl_hdr;
         struct __attribute__ ((__packed__)) {
@@ -162,6 +157,33 @@ static int handle_proc_ev(int nl_sock)
         };
     } nlcn_msg;
 	
+	int rc = recv(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
+	if (rc == 0) {
+		/* shutdown? */
+		return 0;
+	} else if (rc == -1) {
+		if (errno == EINTR) return 0;
+		perror("netlink recv");
+		return -1;
+	}
+	switch (nlcn_msg.proc_ev.what) {
+		case proc_event::PROC_EVENT_FORK:
+			handle_fork_ev((proc_event&)nlcn_msg.proc_ev);
+			break;
+		case proc_event::PROC_EVENT_EXIT:
+			handle_exit_ev((proc_event&)nlcn_msg.proc_ev);
+			break;
+		default:
+			break;
+	}
+	return 1;
+}
+ 
+static volatile bool need_exit = false;
+static int main_loop(int nl_sock)
+{
+    int rs; fd_set Rsocks; struct timeval timeout;
+		
     while (!need_exit) {
 		
 		FD_ZERO(&Rsocks); FD_SET(nl_sock,&Rsocks);
@@ -175,25 +197,7 @@ static int handle_proc_ev(int nl_sock)
 		
 		if (rs)
 		{
-			rc = recv(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
-			if (rc == 0) {
-				/* shutdown? */
-				return 0;
-			} else if (rc == -1) {
-				if (errno == EINTR) continue;
-				perror("netlink recv");
-				return -1;
-			}
-			switch (nlcn_msg.proc_ev.what) {
-				case proc_event::PROC_EVENT_FORK:
-					handle_fork_ev((proc_event&)nlcn_msg.proc_ev);
-					break;
-				case proc_event::PROC_EVENT_EXIT:
-					handle_exit_ev((proc_event&)nlcn_msg.proc_ev);
-					break;
-				default:
-					break;
-			}
+			handle_proc_ev(nl_sock);
 		}
 		else
 		{
@@ -201,7 +205,7 @@ static int handle_proc_ev(int nl_sock)
 			
 		}
 		
-		printf("fin boucle\n");
+		//printf("fin boucle\n");
     }
 
     return 0;
@@ -230,7 +234,7 @@ int main(int argc, const char *argv[])
         goto out;
     }
 
-    rc = handle_proc_ev(nl_sock);
+    rc = main_loop(nl_sock);
     if (rc == -1) {
         rc = EXIT_FAILURE;
         goto out;
