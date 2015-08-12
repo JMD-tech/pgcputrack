@@ -79,33 +79,59 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
+proc_t* read_procinfo(pid_t pid)
+{
+	static pid_t spid[2];
+	spid[0]=pid; spid[1]=0;
+	PROCTAB* proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_PID, spid);
+	// On wheezy the freeproc() function is present in libprocps header but not lib
+	//  so we use a static structure to workaround memory leak...
+	static proc_t proc_info;
+	proc_t* res=readproc(proc, &proc_info);
+	closeproc(proc);
+	if (likely(res))
+		return &proc_info;
+	else
+		return 0;
+}
+
 // On fork event, we add the process to the list of processes to monitor,
 //  and store the starting time and initial command
 void handle_fork_ev(struct proc_event &proc_ev)
 {
-	// We check that both parent and child process command name is postgres
-	// proc_ev.event_data.exit.process_pid
+	// Check that parent process name is postgres
+	//possible perf upgrade here: cache postgres master process's PID to save one lookup per fork...
+	//  also we would need to track exit of this process, and also exec of first postgres process to handle backend restart
+	proc_t* proc_info=read_procinfo(proc_ev.event_data.fork.parent_pid);
+	if (unlikely(!proc_info))
+		{ printf("fork.parent_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.parent_pid); return; }
+	if (strcmp(proc_info->cmd,"postgres")) return;
+
+	// Then check that child process name is postgres too
+	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
+		{ printf("fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid); return; }
+	if (strcmp(proc_info->cmd,"postgres")) return;
+	
+	printf("fork: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.fork.child_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+	
+
 }
 
 // Handle exit event
 void handle_exit_ev(struct proc_event &proc_ev)
 {
-	static pid_t spid[2];//={pid,0};
-	spid[0]=proc_ev.event_data.exit.process_pid; spid[1]=0;
-	PROCTAB* proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_PID, spid);
-	
-	static proc_t proc_info;
-	if (readproc(proc, &proc_info))
+	proc_t* proc_info=read_procinfo(proc_ev.event_data.exit.process_pid);
+	if (proc_info)
 	{
 		//char *cmdline=(proc_info.cmdline?*proc_info.cmdline:proc_info.cmd);
 		//if (proc_info.cmdline) if (*proc_info.cmdline) cmdline=*proc_info.cmdline;
-		printf("PID %u, PPID %u, cmd=%s time=%llu\n",spid[0],proc_info.ppid,proc_info.cmd,proc_info.utime+proc_info.stime);
 		//if (proc_info.cmdline)
 		//	for (int argn=0;proc_info.cmdline[argn];++argn)
 		//		printf("%u %s\n",argn,proc_info.cmdline[argn]);
 		//freeproc(proc_info);
+		//printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.exit.process_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
 	}
-	closeproc(proc);
+
 }
 
 /*
@@ -135,11 +161,9 @@ static int handle_proc_ev(int nl_sock)
         }
         switch (nlcn_msg.proc_ev.what) {
             case proc_event::PROC_EVENT_FORK:
-				printf("fork: ");
 				handle_fork_ev(nlcn_msg.proc_ev);
                 break;
             case proc_event::PROC_EVENT_EXIT:
-				printf("exit: ");
 				handle_exit_ev(nlcn_msg.proc_ev);
                 break;
 			default:
