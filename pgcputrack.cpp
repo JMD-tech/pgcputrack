@@ -152,7 +152,8 @@ void handle_exit_ev(struct proc_event &proc_ev)
 static volatile bool need_exit = false;
 static int handle_proc_ev(int nl_sock)
 {
-    int rc;
+    int rc,rs; fd_set Rsocks; struct timeval timeout;
+	
     struct __attribute__ ((aligned(NLMSG_ALIGNTO))) {
         struct nlmsghdr nl_hdr;
         struct __attribute__ ((__packed__)) {
@@ -160,27 +161,47 @@ static int handle_proc_ev(int nl_sock)
             struct proc_event proc_ev;
         };
     } nlcn_msg;
-
+	
     while (!need_exit) {
-        rc = recv(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
-        if (rc == 0) {
-            /* shutdown? */
-            return 0;
-        } else if (rc == -1) {
-            if (errno == EINTR) continue;
-            perror("netlink recv");
-            return -1;
-        }
-        switch (nlcn_msg.proc_ev.what) {
-            case proc_event::PROC_EVENT_FORK:
-				handle_fork_ev((proc_event&)nlcn_msg.proc_ev);
-                break;
-            case proc_event::PROC_EVENT_EXIT:
-				handle_exit_ev((proc_event&)nlcn_msg.proc_ev);
-                break;
-			default:
-				break;
-        }
+		
+		FD_ZERO(&Rsocks); FD_SET(nl_sock,&Rsocks);
+		timeout.tv_sec=0; timeout.tv_usec=100000;
+		rs = select(nl_sock+1, &Rsocks, (fd_set *) 0, (fd_set *) 0, &timeout);
+		if (unlikely((rs == -1))) {
+			if (errno == EINTR) continue;
+			perror("select");
+			return -1;
+		}
+		
+		if (rs)
+		{
+			rc = recv(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
+			if (rc == 0) {
+				/* shutdown? */
+				return 0;
+			} else if (rc == -1) {
+				if (errno == EINTR) continue;
+				perror("netlink recv");
+				return -1;
+			}
+			switch (nlcn_msg.proc_ev.what) {
+				case proc_event::PROC_EVENT_FORK:
+					handle_fork_ev((proc_event&)nlcn_msg.proc_ev);
+					break;
+				case proc_event::PROC_EVENT_EXIT:
+					handle_exit_ev((proc_event&)nlcn_msg.proc_ev);
+					break;
+				default:
+					break;
+			}
+		}
+		else
+		{
+			// Do cmdline polling
+			
+		}
+		
+		printf("fin boucle\n");
     }
 
     return 0;
