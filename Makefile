@@ -1,5 +1,6 @@
 
-LDFLAGS+= -lprocps -s
+LDFLAGS+= -lprocps -lstdc++ -s
+CXXFLAGS+= -std=c++11
 
 default: all
 

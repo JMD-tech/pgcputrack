@@ -14,6 +14,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <map>
+
+class pgprocinfo {
+	bool cx_ident;
+	
+};
+
+//std::map<pid_t,pgprocinfo> pgprocs;
 
 /*
  * connect to netlink
@@ -161,10 +169,10 @@ static int handle_proc_ev(int nl_sock)
         }
         switch (nlcn_msg.proc_ev.what) {
             case proc_event::PROC_EVENT_FORK:
-				handle_fork_ev(nlcn_msg.proc_ev);
+				handle_fork_ev((proc_event&)nlcn_msg.proc_ev);
                 break;
             case proc_event::PROC_EVENT_EXIT:
-				handle_exit_ev(nlcn_msg.proc_ev);
+				handle_exit_ev((proc_event&)nlcn_msg.proc_ev);
                 break;
 			default:
 				break;
