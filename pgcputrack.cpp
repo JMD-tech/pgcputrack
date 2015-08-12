@@ -17,11 +17,11 @@
 #include <map>
 
 class pgprocinfo {
-	bool cx_ident;
+	bool cx_ident=false;
 	
 };
 
-//std::map<pid_t,pgprocinfo> pgprocs;
+std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
 
 /*
  * connect to netlink
@@ -122,13 +122,17 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	
 	printf("fork: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.fork.child_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
 	
-
+	// Create the process information class
+	pgprocs[proc_ev.event_data.fork.child_pid];
 }
 
 // Handle exit event
 void handle_exit_ev(struct proc_event &proc_ev)
 {
-	proc_t* proc_info=read_procinfo(proc_ev.event_data.exit.process_pid);
+	pid_t pid=proc_ev.event_data.exit.process_pid;
+	// We ignore notifications for processes not identified at fork time
+	if (!pgprocs.count(pid)) return;
+	proc_t* proc_info=read_procinfo(pid);
 	if (proc_info)
 	{
 		//char *cmdline=(proc_info.cmdline?*proc_info.cmdline:proc_info.cmd);
@@ -137,9 +141,9 @@ void handle_exit_ev(struct proc_event &proc_ev)
 		//	for (int argn=0;proc_info.cmdline[argn];++argn)
 		//		printf("%u %s\n",argn,proc_info.cmdline[argn]);
 		//freeproc(proc_info);
-		//printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.exit.process_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+		printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
 	}
-
+	pgprocs.erase(pid);
 }
 
 /*
