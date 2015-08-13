@@ -34,6 +34,7 @@ class pgprocinfo {
 	public:
 		bool cx_ident=false;
 		unsigned long long cputime=0;
+		string db,user,from;
 };
 
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
@@ -104,7 +105,7 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
 
 void save_data_atexit(pid_t pid)
 {
-	printf("PID %u consumed %llu ms CPU\n",pid,(pgprocs.at(pid).cputime*10));
+	printf("PID %u consumed %llu ms CPU on %s DB, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
 }
 
 //TODO: possible perf upgrade: use PID vector
@@ -214,6 +215,11 @@ void update_pgprocinfo()
 					if (likely(args.size()>1))
 					{
 						printf("PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
+						//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
+						// args[0] should be "postgres:"
+						it->second.user=args[1];
+						it->second.db=args[2]; 
+						it->second.from=args[3];
 						it->second.cx_ident=true;
 					}
 					else
