@@ -102,6 +102,11 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
+void save_data_atexit(pid_t pid)
+{
+	printf("PID %u consumed %llu ms CPU\n",pid,(pgprocs.at(pid).cputime*10));
+}
+
 //TODO: possible perf upgrade: use PID vector
 proc_t* read_procinfo(pid_t pid)
 {
@@ -157,10 +162,14 @@ void handle_exit_ev(struct proc_event &proc_ev)
 		//	for (int argn=0;proc_info.cmdline[argn];++argn)
 		//		printf("%u %s\n",argn,proc_info.cmdline[argn]);
 		//freeproc(proc_info);
-		printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+		//printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+		save_data_atexit(pid);
 	}
 	else
-		printf("missing proc_info at exit, PID=%u\n",pid);
+	{
+		//printf("missing proc_info at exit, PID=%u\n",pid);
+		save_data_atexit(pid);
+	}
 	pgprocs.erase(pid);
 }
 
@@ -206,12 +215,17 @@ void update_pgprocinfo()
 		{
 			if (!it->second.cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
 			{
-				if (proc_info->cmd) {
+				if (likely(proc_info->cmd)) {
 					std::vector<string> args=explode(*proc_info->cmdline," ");
-					if (args.size()>1)
+					if (likely(args.size()>1))
 					{
 						printf("PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
 						it->second.cx_ident=true;
+					}
+					else
+					{
+						// pg backend on this VM takes about 4ms to change client process title
+						//printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",it->first,*proc_info->cmdline);
 					}
 				}
 			}
@@ -219,7 +233,10 @@ void update_pgprocinfo()
 			it->second.cputime=proc_info->stime+proc_info->utime;
 		}
 		else
-			printf("no proc info for: %u\n",it->first);
+		{
+			//printf("no more proc info for: %u\n",it->first);
+			save_data_atexit(it->first);
+		}
 	}
 }
  
@@ -231,7 +248,7 @@ static int main_loop(int nl_sock)
     while (!need_exit) {
 		
 		FD_ZERO(&Rsocks); FD_SET(nl_sock,&Rsocks);
-		timeout.tv_sec=0; timeout.tv_usec=100000;
+		timeout.tv_sec=0; timeout.tv_usec=10000;
 		rs = select(nl_sock+1, &Rsocks, (fd_set *) 0, (fd_set *) 0, &timeout);
 		if (unlikely((rs == -1))) {
 			if (errno == EINTR) continue;
