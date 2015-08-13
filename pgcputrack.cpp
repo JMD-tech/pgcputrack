@@ -15,10 +15,25 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <map>
+#include <vector>
+#include <string>
+
+using std::string;
+
+std::vector<string> explode( const string& s, const string& separ ) {
+	std::vector<string> resu; string token("");
+	for ( auto const &c: s ) {
+		if (separ.find_first_of(c)==string::npos) token+=c;
+		else { resu.push_back(token); token=""; }
+	}
+	if (token.size()) resu.push_back(token);
+	return resu;
+}
 
 class pgprocinfo {
-	bool cx_ident=false;
-	
+	public:
+		bool cx_ident=false;
+		unsigned long long cputime=0;
 };
 
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
@@ -87,6 +102,7 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
+//TODO: possible perf upgrade: use PID vector
 proc_t* read_procinfo(pid_t pid)
 {
 	static pid_t spid[2];
@@ -143,6 +159,8 @@ void handle_exit_ev(struct proc_event &proc_ev)
 		//freeproc(proc_info);
 		printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
 	}
+	else
+		printf("missing proc_info at exit, PID=%u\n",pid);
 	pgprocs.erase(pid);
 }
 
@@ -178,6 +196,32 @@ static int handle_proc_ev(int nl_sock)
 	}
 	return 1;
 }
+
+void update_pgprocinfo()
+{
+	for (auto it=pgprocs.begin();it!=pgprocs.end();++it)
+	{
+		proc_t* proc_info=read_procinfo(it->first);
+		if (proc_info)
+		{
+			if (!it->second.cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
+			{
+				if (proc_info->cmd) {
+					std::vector<string> args=explode(*proc_info->cmdline," ");
+					if (args.size()>1)
+					{
+						printf("PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
+						it->second.cx_ident=true;
+					}
+				}
+			}
+			// Update CPU time
+			it->second.cputime=proc_info->stime+proc_info->utime;
+		}
+		else
+			printf("no proc info for: %u\n",it->first);
+	}
+}
  
 static volatile bool need_exit = false;
 static int main_loop(int nl_sock)
@@ -196,16 +240,10 @@ static int main_loop(int nl_sock)
 		}
 		
 		if (rs)
-		{
 			handle_proc_ev(nl_sock);
-		}
 		else
-		{
-			// Do cmdline polling
-			
-		}
+			update_pgprocinfo();
 		
-		//printf("fin boucle\n");
     }
 
     return 0;
