@@ -154,15 +154,9 @@ void handle_exit_ev(struct proc_event &proc_ev)
 	// We ignore notifications for processes not identified at fork time
 	if (!pgprocs.count(pid)) return;
 	proc_t* proc_info=read_procinfo(pid);
-	if (proc_info)
+	if (unlikely(proc_info))
 	{
-		//char *cmdline=(proc_info.cmdline?*proc_info.cmdline:proc_info.cmd);
-		//if (proc_info.cmdline) if (*proc_info.cmdline) cmdline=*proc_info.cmdline;
-		//if (proc_info.cmdline)
-		//	for (int argn=0;proc_info.cmdline[argn];++argn)
-		//		printf("%u %s\n",argn,proc_info.cmdline[argn]);
-		//freeproc(proc_info);
-		//printf("exit: PID %u, PPID %u, cmd=%s time=%llu\n",pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+		//printf("got all proc_info at exit, PID=%u\n",pid);
 		save_data_atexit(pid);
 	}
 	else
