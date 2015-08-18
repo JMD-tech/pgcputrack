@@ -48,7 +48,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			std::vector<string> args=explode(*proc_info->cmdline," ");
 			if (likely(args.size()>=4))
 			{
-				//printf("# PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
+				//printf("# PID=%u, cmd=%s, cmdline=%s, args%lu\n",proc_info->tid,proc_info->cmd,*proc_info->cmdline,args.size());
 				//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
 				// args[0] should be "postgres:"
 				user=args[1]; db=args[2]; from=args[3];
@@ -173,14 +173,14 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	// Then check that child process name is postgres too
 	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
 	{
-		// short lived process spawned by a postgres process
+		// short lived process forked by a postgres process
 		//printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid);
 		return;
 	}
-	if (strcmp(proc_info->cmd,"postgres"))
+	if (unlikely(strcmp(proc_info->cmd,"postgres")))
 	{
-		// non-postgres process spawned by a postgres backend (can this happen?)
-		//printf("# postgres %u spawned an alien: %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
+		// Can only hapen if postgres-forked process had time to change its cmd before we got there. (does it changes cmd also? => NO, cmdline only)
+		//printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
 		return;
 	}
 	
