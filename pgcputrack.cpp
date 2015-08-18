@@ -20,6 +20,13 @@
 
 using std::string;
 
+unsigned char outlev=2;		// Output verbosity level:
+#define	VL_ERROR   (0)	// Errors only
+#define VL_WARN    (1)	// + Warnings
+#define VL_RESULTS (2)	// + Results
+#define VL_ADDINFO (3)	// + Additionnal info
+#define VL_DEBUG   (4)	// + Debugging info
+
 std::vector<string> explode( const string& s, const string& separ ) {
 	std::vector<string> resu; string token("");
 	for ( auto const &c: s ) {
@@ -48,7 +55,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			std::vector<string> args=explode(*proc_info->cmdline," ");
 			if (likely(args.size()>=4))
 			{
-				//printf("# PID=%u, cmd=%s, cmdline=%s, args%lu\n",proc_info->tid,proc_info->cmd,*proc_info->cmdline,args.size());
+				if (outlev>=VL_DEBUG) printf("# PID=%u, cmd=%s, cmdline=%s, args%lu\n",proc_info->tid,proc_info->cmd,*proc_info->cmdline,args.size());
 				//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
 				// args[0] should be "postgres:"
 				user=args[1]; db=args[2]; from=args[3];
@@ -57,7 +64,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			else
 			{
 				// pg backend on this VM takes about 4ms to change client process title
-				//printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",it->first,*proc_info->cmdline);
+				if (outlev>=VL_ADDINFO) printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
 			}
 		}
 	}
@@ -138,7 +145,7 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
 void save_data_atexit(pid_t pid)
 {
 	if (pgprocs.at(pid).cx_ident)
-		printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
+		if (outlev>=VL_RESULTS) printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
 }
 
 //TODO: possible perf upgrade: use PID vector instead of multiple calls
@@ -174,13 +181,13 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
 	{
 		// short lived process forked by a postgres process
-		//printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid);
+		if (outlev>=VL_ADDINFO) printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid);
 		return;
 	}
 	if (unlikely(strcmp(proc_info->cmd,"postgres")))
 	{
 		// Can only hapen if postgres-forked process had time to change its cmd before we got there. (does it changes cmd also? => NO, cmdline only)
-		//printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
+		if (outlev>=VL_WARN) printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
 		return;
 	}
 	
@@ -197,14 +204,14 @@ void handle_exit_ev(const struct proc_event& proc_ev)
 	proc_t* proc_info=read_procinfo(pid);
 	if (proc_info)
 	{
-		//printf("# got all proc_info at exit, PID=%u\n",pid);
+		if (outlev>=VL_ADDINFO) printf("# got all proc_info at exit, PID=%u\n",pid);
 		// update CPU and ident cmdline if not yet done...
 		pgprocs.at(pid).update_from(proc_info);
 		save_data_atexit(pid);
 	}
 	else
 	{
-		//printf("# missing proc_info at exit, PID=%u\n",pid);
+		if (outlev>=VL_ADDINFO) printf("# missing proc_info at exit, PID=%u\n",pid);
 		save_data_atexit(pid);
 	}
 	pgprocs.erase(pid);
@@ -270,7 +277,7 @@ static int main_loop(int nl_sock)
 			for (auto &it: pgprocs)
 				if (!it.second.update_from(read_procinfo(it.first)))
 				{
-					//printf("# no more proc info for: %u\n",it.first);
+					if (outlev>=VL_ADDINFO) printf("# no more proc info for: %u\n",it.first);
 					save_data_atexit(it.first);
 					deadprocs.push_back(it.first);
 				}
