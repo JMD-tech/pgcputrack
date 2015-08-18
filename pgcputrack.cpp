@@ -48,6 +48,7 @@ static int nl_connect()
     int rc;
     int nl_sock;
     struct sockaddr_nl sa_nl;
+	memset(&sa_nl, 0, sizeof(sa_nl));
 
     nl_sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR);
     if (nl_sock == -1) {
@@ -156,14 +157,15 @@ void handle_exit_ev(struct proc_event &proc_ev)
 	// We ignore notifications for processes not identified at fork time
 	if (!pgprocs.count(pid)) return;
 	proc_t* proc_info=read_procinfo(pid);
-	if (unlikely(proc_info))
+	if (proc_info)
 	{
-		//printf("got all proc_info at exit, PID=%u\n",pid);
+		//printf("# got all proc_info at exit, PID=%u\n",pid);
+		//TODO: update CPU and ident cmdline if not done... well at worst we lose track of CPU use < resolution...
 		save_data_atexit(pid);
 	}
 	else
 	{
-		//printf("missing proc_info at exit, PID=%u\n",pid);
+		//printf("# missing proc_info at exit, PID=%u\n",pid);
 		save_data_atexit(pid);
 	}
 	pgprocs.erase(pid);
@@ -207,11 +209,13 @@ void update_pgprocinfo()
 	for (auto it=pgprocs.begin();it!=pgprocs.end();++it)
 	{
 		proc_t* proc_info=read_procinfo(it->first);
-		if (proc_info)
+		
+		if (likely(proc_info))
 		{
+			
 			if (!it->second.cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
 			{
-				if (likely(proc_info->cmd)) {
+				if (likely(proc_info->cmdline)) {
 					std::vector<string> args=explode(*proc_info->cmdline," ");
 					if (likely(args.size()>=4))
 					{
@@ -230,14 +234,16 @@ void update_pgprocinfo()
 					}
 				}
 			}
+			
 			// Update CPU time
 			it->second.cputime=proc_info->stime+proc_info->utime;
 		}
 		else
 		{
-			//printf("no more proc info for: %u\n",it->first);
+			//printf("# no more proc info for: %u\n",it->first);
 			save_data_atexit(it->first);
 		}
+		
 	}
 }
  
