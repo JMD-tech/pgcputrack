@@ -61,7 +61,8 @@ class pgprocinfo {
 		int64_t start_time,stop_time=0;
 		string db,user,from;
 		bool update_from(proc_t* proc_info);
-		bool output_data();
+		bool output_data() const;
+		void mark_stop();
 };
 
 // For processes we get a start notification, get millisecond resolution time
@@ -105,17 +106,19 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 	return true;
 }
 
-bool pgprocinfo::output_data()
+bool pgprocinfo::output_data() const
 {
 	if (cx_ident)
 		if (likely(outlev>=VL_RESULTS_COMPACT))
 			if (likely(outlev==VL_RESULTS_COMPACT))
 				printf("%u\t%ld\t%ld\t%llu\t%s\t%s\t%s\n",pid,start_time,stop_time,cputime,db.c_str(),user.c_str(),from.c_str());
 			else
-				printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime,db.c_str(),user.c_str(),from.c_str());
+				printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime-cputime_before,db.c_str(),user.c_str(),from.c_str());
 		
 	return cx_ident;
 }
+
+void pgprocinfo::mark_stop() { stop_time=getmillis()-sup_millis; }
 
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
 
@@ -250,6 +253,7 @@ void handle_exit_ev(const struct proc_event& proc_ev)
 	}
 	else
 		if (unlikely(outlev>=VL_ADDINFO)) printf("# missing proc_info at exit, PID=%u\n",pid);
+	pgprocs.at(pid).mark_stop();
 	pgprocs.at(pid).output_data();
 	pgprocs.erase(pid);
 }
@@ -315,6 +319,7 @@ static int main_loop(int nl_sock)
 				if (!it.second.update_from(read_procinfo(it.first)))
 				{
 					if (unlikely(outlev>=VL_ADDINFO)) printf("# no more proc info for: %u\n",it.first);
+					it.second.mark_stop();
 					it.second.output_data();
 					deadprocs.push_back(it.first);
 				}
