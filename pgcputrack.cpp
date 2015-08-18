@@ -51,23 +51,27 @@ std::vector<string> explode( const string& s, const string& separ ) {
 
 class pgprocinfo {
 	public:
-		pgprocinfo();
+		//pgprocinfo() {};
+		pgprocinfo(pid_t in_pid);
 		pgprocinfo(proc_t* proc_info);
+		pid_t pid;
 		bool cx_ident=false;
 		unsigned long long cputime=0,cputime_before=0;
 		int64_t start_time=0,stop_time=0;
 		string db,user,from;
 		bool update_from(proc_t* proc_info);
+		bool output_data();
 };
 
 // For processes we get a start notification, get millisecond resolution time
-pgprocinfo::pgprocinfo() { start_time=getmillis()-sup_millis; }
+pgprocinfo::pgprocinfo(pid_t in_pid):pid(in_pid) { start_time=getmillis()-sup_millis; }
 
 // For processes started before, we extract the start time (seconds) from proc_info struct
 //  nope => we store how much CPU was used before monitoring and use start_time=0;
 // and we do the update_from procinfo now
 pgprocinfo::pgprocinfo(proc_t* proc_info)
 {
+	pid=proc_info->tid;
 	cputime_before=proc_info->stime+proc_info->utime;
 	update_from(proc_info);
 }
@@ -97,9 +101,16 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 	}
 	
 	// Update CPU time
-	cputime=proc_info->stime+proc_info->utime;
+	cputime=(proc_info->stime+proc_info->utime)*10;
 	
 	return true;
+}
+
+bool pgprocinfo::output_data()
+{
+	if (cx_ident)
+		if (outlev>=VL_RESULTS) printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime,db.c_str(),user.c_str(),from.c_str());
+	return cx_ident;
 }
 
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
@@ -169,12 +180,6 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
     return 0;
 }
 
-void save_data_atexit(pid_t pid)
-{
-	if (pgprocs.at(pid).cx_ident)
-		if (outlev>=VL_RESULTS) printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
-}
-
 //TODO: possible perf upgrade: use PID vector instead of multiple calls
 proc_t* read_procinfo(pid_t pid)
 {
@@ -200,26 +205,30 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	//possible perf upgrade here: cache postgres master process's PID to save one lookup per fork...
 	//  also we would need to track exit of this process, and also exec of first postgres process to handle backend restart
 	//   could allow to detect on cases of parent:"couldn't read procinfo" if it was a PostgreSQL process...
-	proc_t* proc_info=read_procinfo(proc_ev.event_data.fork.parent_pid);
+	pid_t &child_pid=proc_ev.event_data.fork.child_pid,&parent_pid=proc_ev.event_data.fork.parent_pid;
+	proc_t* proc_info=read_procinfo(parent_pid);
 	if (unlikely(!proc_info)) return;  // short lived unknown parent process, unrelated to postgres unless main backend stopped
 	if (strcmp(proc_info->cmd,"postgres")) return;
 
 	// Then check that child process name is postgres too
-	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
+	if (unlikely(!read_procinfo(child_pid)))
 	{
 		// short lived process forked by a postgres process
-		if (outlev>=VL_ADDINFO) printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid);
+		if (outlev>=VL_ADDINFO) printf("# fork.child_pid %u: Couldn't read procinfo\n",child_pid);
 		return;
 	}
 	if (unlikely(strcmp(proc_info->cmd,"postgres")))
 	{
-		// Can only hapen if postgres-forked process had time to change its cmd before we got there. (does it changes cmd also? => NO, cmdline only)
-		if (outlev>=VL_WARN) printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
+		// Can only happen if postgres-forked process had time to change its cmd before we got there. (does it changes cmd also? => NO, cmdline only)
+		if (outlev>=VL_WARN) printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",parent_pid,child_pid,proc_info->cmd);
 		return;
 	}
+	pgprocinfo newpgproc(child_pid);
 	
-	// Create the process information class
-	pgprocs[proc_ev.event_data.fork.child_pid];
+	// Create the process information object into processes map
+	//pgprocs[child_pid]=pgprocinfo(child_pid);	// clean syntax but unfortunately inefficient in C++
+	//pgprocs.emplace(std::piecewise_construct, std::make_tuple(child_pid), std::make_tuple(child_pid, child_pid)); // total ivory tower brainfuck...
+	pgprocs.insert(std::pair<pid_t,pgprocinfo>(child_pid,child_pid));
 }
 
 // Handle exit event
@@ -234,13 +243,10 @@ void handle_exit_ev(const struct proc_event& proc_ev)
 		if (outlev>=VL_ADDINFO) printf("# got all proc_info at exit, PID=%u\n",pid);
 		// update CPU and ident cmdline if not yet done...
 		pgprocs.at(pid).update_from(proc_info);
-		save_data_atexit(pid);
 	}
 	else
-	{
 		if (outlev>=VL_ADDINFO) printf("# missing proc_info at exit, PID=%u\n",pid);
-		save_data_atexit(pid);
-	}
+	pgprocs.at(pid).output_data();
 	pgprocs.erase(pid);
 }
 
@@ -305,7 +311,7 @@ static int main_loop(int nl_sock)
 				if (!it.second.update_from(read_procinfo(it.first)))
 				{
 					if (outlev>=VL_ADDINFO) printf("# no more proc info for: %u\n",it.first);
-					save_data_atexit(it.first);
+					it.second.output_data();
 					deadprocs.push_back(it.first);
 				}
 		
