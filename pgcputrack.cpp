@@ -191,7 +191,8 @@ void handle_exit_ev(struct proc_event &proc_ev)
 	if (proc_info)
 	{
 		//printf("# got all proc_info at exit, PID=%u\n",pid);
-		//TODO: update CPU and ident cmdline if not done... well at worst we lose track of CPU use < resolution...
+		// update CPU and ident cmdline if not yet done...
+		pgprocs.at(pid).update_from(proc_info);
 		save_data_atexit(pid);
 	}
 	else
