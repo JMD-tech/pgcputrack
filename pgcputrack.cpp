@@ -87,7 +87,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			std::vector<string> args=explode(*proc_info->cmdline," ");
 			if (likely(args.size()>=4))
 			{
-				if (outlev>=VL_DEBUG) printf("# PID=%u, cmd=%s, cmdline=%s, args%lu\n",proc_info->tid,proc_info->cmd,*proc_info->cmdline,args.size());
+				if (unlikely(outlev>=VL_DEBUG)) printf("# PID=%u, cmd=%s, cmdline=%s, args%lu\n",proc_info->tid,proc_info->cmd,*proc_info->cmdline,args.size());
 				//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
 				// args[0] should be "postgres:"
 				user=args[1]; db=args[2]; from=args[3];
@@ -95,7 +95,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			}
 			else
 				// pg client backend on this VM takes about 4ms to change client process title
-				if (outlev>=VL_ADDINFO) printf("# PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
+				if (unlikely(outlev>=VL_ADDINFO)) printf("# PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
 		}
 	}
 	
@@ -108,8 +108,8 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 bool pgprocinfo::output_data()
 {
 	if (cx_ident)
-		if (outlev>=VL_RESULTS_COMPACT)
-			if (outlev==VL_RESULTS_COMPACT)
+		if (likely(outlev>=VL_RESULTS_COMPACT))
+			if (likely(outlev==VL_RESULTS_COMPACT))
 				printf("%u\t%ld\t%ld\t%llu\t%s\t%s\t%s\n",pid,start_time,stop_time,cputime,db.c_str(),user.c_str(),from.c_str());
 			else
 				printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime,db.c_str(),user.c_str(),from.c_str());
@@ -218,7 +218,7 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	if (unlikely(!read_procinfo(child_pid)))
 	{
 		// short lived process forked by a postgres process
-		if (outlev>=VL_ADDINFO) printf("# fork.child_pid %u: Couldn't read procinfo\n",child_pid);
+		if (unlikely(outlev>=VL_ADDINFO)) printf("# fork.child_pid %u: Couldn't read procinfo\n",child_pid);
 		return;
 	}
 	if (unlikely(strcmp(proc_info->cmd,"postgres")))
@@ -244,12 +244,12 @@ void handle_exit_ev(const struct proc_event& proc_ev)
 	proc_t* proc_info=read_procinfo(pid);
 	if (proc_info)
 	{
-		if (outlev>=VL_ADDINFO) printf("# got all proc_info at exit, PID=%u\n",pid);
+		if (unlikely(outlev>=VL_ADDINFO)) printf("# got all proc_info at exit, PID=%u\n",pid);
 		// update CPU and ident cmdline if not yet done...
 		pgprocs.at(pid).update_from(proc_info);
 	}
 	else
-		if (outlev>=VL_ADDINFO) printf("# missing proc_info at exit, PID=%u\n",pid);
+		if (unlikely(outlev>=VL_ADDINFO)) printf("# missing proc_info at exit, PID=%u\n",pid);
 	pgprocs.at(pid).output_data();
 	pgprocs.erase(pid);
 }
@@ -266,10 +266,10 @@ static int handle_proc_ev(int nl_sock)
     } nlcn_msg;
 	
 	int rc = recv(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
-	if (rc == 0) {
+	if (unlikely(rc == 0)) {
 		/* shutdown? */
 		return 0;
-	} else if (rc == -1) {
+	} else if (unlikely(rc == -1)) {
 		if (errno == EINTR) return 0;
 		perror("# netlink recv");
 		return -1;
@@ -314,7 +314,7 @@ static int main_loop(int nl_sock)
 			for (auto &it: pgprocs)
 				if (!it.second.update_from(read_procinfo(it.first)))
 				{
-					if (outlev>=VL_ADDINFO) printf("# no more proc info for: %u\n",it.first);
+					if (unlikely(outlev>=VL_ADDINFO)) printf("# no more proc info for: %u\n",it.first);
 					it.second.output_data();
 					deadprocs.push_back(it.first);
 				}
