@@ -14,18 +14,30 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 #include <map>
 #include <vector>
 #include <string>
 
 using std::string;
 
-unsigned char outlev=2;		// Output verbosity level:
+uint8_t outlev=2;		// Output verbosity level:
 #define	VL_ERROR   (0)	// Errors only
 #define VL_WARN    (1)	// + Warnings
 #define VL_RESULTS (2)	// + Results
 #define VL_ADDINFO (3)	// + Additionnal info
 #define VL_DEBUG   (4)	// + Debugging info
+
+// We store both startup timestamp and corresponding millisecond monotonic clock reference
+time_t sup_time;
+int64_t sup_millis;
+
+int64_t getmillis()
+{
+	struct timespec tp;
+	clock_gettime(CLOCK_MONOTONIC,&tp);
+	return (int64_t)tp.tv_sec*1000+tp.tv_nsec/1000000;
+}
 
 std::vector<string> explode( const string& s, const string& separ ) {
 	std::vector<string> resu; string token("");
@@ -39,11 +51,26 @@ std::vector<string> explode( const string& s, const string& separ ) {
 
 class pgprocinfo {
 	public:
+		pgprocinfo();
+		pgprocinfo(proc_t* proc_info);
 		bool cx_ident=false;
-		unsigned long long cputime=0;
+		unsigned long long cputime=0,cputime_before=0;
+		int64_t start_time=0,stop_time=0;
 		string db,user,from;
 		bool update_from(proc_t* proc_info);
 };
+
+// For processes we get a start notification, get millisecond resolution time
+pgprocinfo::pgprocinfo() { start_time=getmillis()-sup_millis; }
+
+// For processes started before, we extract the start time (seconds) from proc_info struct
+//  nope => we store how much CPU was used before monitoring and use start_time=0;
+// and we do the update_from procinfo now
+pgprocinfo::pgprocinfo(proc_t* proc_info)
+{
+	cputime_before=proc_info->stime+proc_info->utime;
+	update_from(proc_info);
+}
 
 bool pgprocinfo::update_from(proc_t* proc_info)
 {
@@ -64,7 +91,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 			else
 			{
 				// pg backend on this VM takes about 4ms to change client process title
-				if (outlev>=VL_ADDINFO) printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
+				if (outlev>=VL_ADDINFO) printf("# PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
 			}
 		}
 	}
@@ -302,6 +329,14 @@ int main(int argc, const char *argv[])
 
     signal(SIGINT, &on_sigint);
     siginterrupt(SIGINT, true);
+	
+	sup_millis=getmillis();
+	time(&sup_time);
+	if (outlev>=VL_RESULTS)
+	{
+		struct tm *tp=localtime(&sup_time);
+		printf("START %04d-%02d-%02d %02d:%02d:%02d\n",tp->tm_year+1900,tp->tm_mon+1,tp->tm_mday,tp->tm_hour,tp->tm_min,tp->tm_sec);
+	}
 
     nl_sock = nl_connect();
     if (nl_sock == -1)
