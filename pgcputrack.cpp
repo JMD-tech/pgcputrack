@@ -165,24 +165,31 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	// Check that parent process name is postgres
 	//possible perf upgrade here: cache postgres master process's PID to save one lookup per fork...
 	//  also we would need to track exit of this process, and also exec of first postgres process to handle backend restart
+	//   could allow to detect on cases of parent:"couldn't read procinfo" if it was a PostgreSQL process...
 	proc_t* proc_info=read_procinfo(proc_ev.event_data.fork.parent_pid);
-	if (unlikely(!proc_info))
-		{ printf("# fork.parent_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.parent_pid); return; }
+	if (unlikely(!proc_info)) return;  // short lived unknown parent process, unrelated to postgres unless main backend stopped
 	if (strcmp(proc_info->cmd,"postgres")) return;
 
 	// Then check that child process name is postgres too
 	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
-		{ printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid); return; }
-	if (strcmp(proc_info->cmd,"postgres")) return;
-	
-	//printf("fork: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.fork.child_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+	{
+		// short lived process spawned by a postgres process
+		//printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid);
+		return;
+	}
+	if (strcmp(proc_info->cmd,"postgres"))
+	{
+		// non-postgres process spawned by a postgres backend (can this happen?)
+		//printf("# postgres %u spawned an alien: %u %s\n",proc_ev.event_data.fork.parent_pid,proc_ev.event_data.fork.child_pid,proc_info->cmd);
+		return;
+	}
 	
 	// Create the process information class
 	pgprocs[proc_ev.event_data.fork.child_pid];
 }
 
 // Handle exit event
-void handle_exit_ev(struct proc_event &proc_ev)
+void handle_exit_ev(const struct proc_event& proc_ev)
 {
 	pid_t pid=proc_ev.event_data.exit.process_pid;
 	// We ignore notifications for processes not identified at fork time
@@ -245,6 +252,8 @@ static int main_loop(int nl_sock)
 		
 		FD_ZERO(&Rsocks); FD_SET(nl_sock,&Rsocks);
 		timeout.tv_sec=0; timeout.tv_usec=10000;	// default 10ms resolution
+		// consumes <1% CPU on our production setup during peaks at 10ms interval, raising it at 20ms incurs no significant difference,
+		//  and lowering it is pointless as 10ms is the resolution of kernel's processes utime+stime counter
 		rs = select(nl_sock+1, &Rsocks, (fd_set *) 0, (fd_set *) 0, &timeout);
 		if (unlikely((rs == -1))) {
 			if (errno == EINTR) continue;
@@ -255,12 +264,20 @@ static int main_loop(int nl_sock)
 		if (rs)
 			handle_proc_ev(nl_sock);
 		else
-			for (auto it=pgprocs.begin();it!=pgprocs.end();++it)
-				if (!it->second.update_from(read_procinfo(it->first)))
+		{
+			// Update pg processes info struct
+			std::vector<pid_t> deadprocs;
+			for (auto &it: pgprocs)
+				if (!it.second.update_from(read_procinfo(it.first)))
 				{
-					//printf("# no more proc info for: %u\n",it->first);
-					save_data_atexit(it->first);
+					//printf("# no more proc info for: %u\n",it.first);
+					save_data_atexit(it.first);
+					deadprocs.push_back(it.first);
 				}
+		
+			// Remove those that weren't running anymore
+			for (auto const &it: deadprocs) pgprocs.erase(it);
+		}
     }
 
     return 0;
