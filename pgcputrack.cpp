@@ -51,7 +51,7 @@ static int nl_connect()
 
     nl_sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR);
     if (nl_sock == -1) {
-        perror("socket");
+        perror("# socket");
         return -1;
     }
 
@@ -61,7 +61,7 @@ static int nl_connect()
 
     rc = bind(nl_sock, (struct sockaddr *)&sa_nl, sizeof(sa_nl));
     if (rc == -1) {
-        perror("bind");
+        perror("# bind");
         close(nl_sock);
         return -1;
     }
@@ -96,7 +96,7 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
 
     rc = send(nl_sock, &nlcn_msg, sizeof(nlcn_msg), 0);
     if (rc == -1) {
-        perror("netlink send");
+        perror("# netlink send");
         return -1;
     }
 
@@ -105,7 +105,7 @@ static int set_proc_ev_listen(int nl_sock, bool enable)
 
 void save_data_atexit(pid_t pid)
 {
-	printf("PID %u consumed %llu ms CPU on %s DB, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
+	printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
 }
 
 //TODO: possible perf upgrade: use PID vector
@@ -134,15 +134,15 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	//  also we would need to track exit of this process, and also exec of first postgres process to handle backend restart
 	proc_t* proc_info=read_procinfo(proc_ev.event_data.fork.parent_pid);
 	if (unlikely(!proc_info))
-		{ printf("fork.parent_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.parent_pid); return; }
+		{ printf("# fork.parent_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.parent_pid); return; }
 	if (strcmp(proc_info->cmd,"postgres")) return;
 
 	// Then check that child process name is postgres too
 	if (unlikely(!read_procinfo(proc_ev.event_data.fork.child_pid)))
-		{ printf("fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid); return; }
+		{ printf("# fork.child_pid %u: Couldn't read procinfo\n",proc_ev.event_data.fork.child_pid); return; }
 	if (strcmp(proc_info->cmd,"postgres")) return;
 	
-	printf("fork: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.fork.child_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
+	//printf("fork: PID %u, PPID %u, cmd=%s time=%llu\n",proc_ev.event_data.fork.child_pid,proc_info->ppid,proc_info->cmd,proc_info->utime+proc_info->stime);
 	
 	// Create the process information class
 	pgprocs[proc_ev.event_data.fork.child_pid];
@@ -185,7 +185,7 @@ static int handle_proc_ev(int nl_sock)
 		return 0;
 	} else if (rc == -1) {
 		if (errno == EINTR) return 0;
-		perror("netlink recv");
+		perror("# netlink recv");
 		return -1;
 	}
 	switch (nlcn_msg.proc_ev.what) {
@@ -214,7 +214,7 @@ void update_pgprocinfo()
 					std::vector<string> args=explode(*proc_info->cmdline," ");
 					if (likely(args.size()>1))
 					{
-						printf("PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
+						//printf("# PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
 						//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
 						// args[0] should be "postgres:"
 						it->second.user=args[1];
@@ -245,14 +245,14 @@ static int main_loop(int nl_sock)
 {
     int rs; fd_set Rsocks; struct timeval timeout;
 		
-    while (!need_exit) {
+    while (likely(!need_exit)) {
 		
 		FD_ZERO(&Rsocks); FD_SET(nl_sock,&Rsocks);
-		timeout.tv_sec=0; timeout.tv_usec=10000;
+		timeout.tv_sec=0; timeout.tv_usec=10000;	// default 10ms resolution
 		rs = select(nl_sock+1, &Rsocks, (fd_set *) 0, (fd_set *) 0, &timeout);
 		if (unlikely((rs == -1))) {
 			if (errno == EINTR) continue;
-			perror("select");
+			perror("# select");
 			return -1;
 		}
 		
