@@ -92,6 +92,8 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 				//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
 				// args[0] should be "postgres:"
 				user=args[1]; db=args[2]; from=args[3];
+				size_t parpos=from.find('(');
+				if (parpos!=string::npos) from=from.substr(0,parpos);
 				cx_ident=true;
 			}
 			else
