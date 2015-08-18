@@ -24,9 +24,10 @@ using std::string;
 uint8_t outlev=2;		// Output verbosity level:
 #define	VL_ERROR   (0)	// Errors only
 #define VL_WARN    (1)	// + Warnings
-#define VL_RESULTS (2)	// + Results
-#define VL_ADDINFO (3)	// + Additionnal info
-#define VL_DEBUG   (4)	// + Debugging info
+#define VL_RESULTS_COMPACT (2)	// + Results (compact TAB parseable)
+#define VL_RESULTS_HUMAN   (3)	// + Results (human-readable)
+#define VL_ADDINFO (4)	// + Additionnal info
+#define VL_DEBUG   (5)	// + Debugging info
 
 // We store both startup timestamp and corresponding millisecond monotonic clock reference
 time_t sup_time;
@@ -57,7 +58,7 @@ class pgprocinfo {
 		pid_t pid;
 		bool cx_ident=false;
 		unsigned long long cputime=0,cputime_before=0;
-		int64_t start_time=0,stop_time=0;
+		int64_t start_time,stop_time=0;
 		string db,user,from;
 		bool update_from(proc_t* proc_info);
 		bool output_data();
@@ -93,10 +94,8 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 				cx_ident=true;
 			}
 			else
-			{
-				// pg backend on this VM takes about 4ms to change client process title
+				// pg client backend on this VM takes about 4ms to change client process title
 				if (outlev>=VL_ADDINFO) printf("# PID %u: not yet enough args to identify, cmdline=\"%s\"\n",proc_info->tid,*proc_info->cmdline);
-			}
 		}
 	}
 	
@@ -109,7 +108,12 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 bool pgprocinfo::output_data()
 {
 	if (cx_ident)
-		if (outlev>=VL_RESULTS) printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime,db.c_str(),user.c_str(),from.c_str());
+		if (outlev>=VL_RESULTS_COMPACT)
+			if (outlev==VL_RESULTS_COMPACT)
+				printf("%u\t%ld\t%ld\t%llu\t%s\t%s\t%s\n",pid,start_time,stop_time,cputime,db.c_str(),user.c_str(),from.c_str());
+			else
+				printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime,db.c_str(),user.c_str(),from.c_str());
+		
 	return cx_ident;
 }
 
@@ -338,7 +342,7 @@ int main(int argc, const char *argv[])
 	
 	sup_millis=getmillis();
 	time(&sup_time);
-	if (outlev>=VL_RESULTS)
+	if (outlev>=VL_RESULTS_COMPACT)
 	{
 		struct tm *tp=localtime(&sup_time);
 		printf("START %04d-%02d-%02d %02d:%02d:%02d\n",tp->tm_year+1900,tp->tm_mon+1,tp->tm_mday,tp->tm_hour,tp->tm_min,tp->tm_sec);
