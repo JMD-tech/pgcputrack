@@ -35,7 +35,38 @@ class pgprocinfo {
 		bool cx_ident=false;
 		unsigned long long cputime=0;
 		string db,user,from;
+		bool update_from(proc_t* proc_info);
 };
+
+bool pgprocinfo::update_from(proc_t* proc_info)
+{
+	if (unlikely(!proc_info)) return false;
+	
+	if (!cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
+	{
+		if (likely(proc_info->cmdline)) {
+			std::vector<string> args=explode(*proc_info->cmdline," ");
+			if (likely(args.size()>=4))
+			{
+				//printf("# PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
+				//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
+				// args[0] should be "postgres:"
+				user=args[1]; db=args[2]; from=args[3];
+				cx_ident=true;
+			}
+			else
+			{
+				// pg backend on this VM takes about 4ms to change client process title
+				//printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",it->first,*proc_info->cmdline);
+			}
+		}
+	}
+	
+	// Update CPU time
+	cputime=proc_info->stime+proc_info->utime;
+	
+	return true;
+}
 
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
 
@@ -110,7 +141,7 @@ void save_data_atexit(pid_t pid)
 		printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,(pgprocs.at(pid).cputime*10),pgprocs.at(pid).db.c_str(),pgprocs.at(pid).user.c_str(),pgprocs.at(pid).from.c_str());
 }
 
-//TODO: possible perf upgrade: use PID vector
+//TODO: possible perf upgrade: use PID vector instead of multiple calls
 proc_t* read_procinfo(pid_t pid)
 {
 	static pid_t spid[2];
@@ -204,49 +235,6 @@ static int handle_proc_ev(int nl_sock)
 	return 1;
 }
 
-void update_pgprocinfo()
-{
-	for (auto it=pgprocs.begin();it!=pgprocs.end();++it)
-	{
-		proc_t* proc_info=read_procinfo(it->first);
-		
-		if (likely(proc_info))
-		{
-			
-			if (!it->second.cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
-			{
-				if (likely(proc_info->cmdline)) {
-					std::vector<string> args=explode(*proc_info->cmdline," ");
-					if (likely(args.size()>=4))
-					{
-						//printf("# PID=%u, cmdline=%s, args%lu\n",it->first,*proc_info->cmdline,args.size());
-						//TODO: erase if writer process/wal writer process/autovacuum launcher process/stats collector process ?
-						// args[0] should be "postgres:"
-						it->second.user=args[1];
-						it->second.db=args[2]; 
-						it->second.from=args[3];
-						it->second.cx_ident=true;
-					}
-					else
-					{
-						// pg backend on this VM takes about 4ms to change client process title
-						//printf("PID %u: not yet enough args to identify, cmdline=\"%s\"\n",it->first,*proc_info->cmdline);
-					}
-				}
-			}
-			
-			// Update CPU time
-			it->second.cputime=proc_info->stime+proc_info->utime;
-		}
-		else
-		{
-			//printf("# no more proc info for: %u\n",it->first);
-			save_data_atexit(it->first);
-		}
-		
-	}
-}
- 
 static volatile bool need_exit = false;
 static int main_loop(int nl_sock)
 {
@@ -266,8 +254,12 @@ static int main_loop(int nl_sock)
 		if (rs)
 			handle_proc_ev(nl_sock);
 		else
-			update_pgprocinfo();
-		
+			for (auto it=pgprocs.begin();it!=pgprocs.end();++it)
+				if (!it->second.update_from(read_procinfo(it->first)))
+				{
+					//printf("# no more proc info for: %u\n",it->first);
+					save_data_atexit(it->first);
+				}
     }
 
     return 0;
