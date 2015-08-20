@@ -66,15 +66,13 @@ class pgprocinfo {
 };
 
 // For processes we get a start notification, get millisecond resolution time
-pgprocinfo::pgprocinfo(pid_t in_pid):pid(in_pid) { start_time=getmillis()-sup_millis; }
+pgprocinfo::pgprocinfo(pid_t in_pid):pid(in_pid),start_time(getmillis()-sup_millis) {};
 
 // For processes started before, we extract the start time (seconds) from proc_info struct
 //  nope => we store how much CPU was used before monitoring and use start_time=0;
 // and we do the update_from procinfo now
-pgprocinfo::pgprocinfo(proc_t* proc_info)
+pgprocinfo::pgprocinfo(proc_t* proc_info):pid(proc_info->tid),start_time(0),cputime_before(proc_info->stime+proc_info->utime)
 {
-	pid=proc_info->tid;
-	cputime_before=proc_info->stime+proc_info->utime;
 	update_from(proc_info);
 }
 
@@ -194,7 +192,7 @@ proc_t* read_procinfo(pid_t pid)
 {
 	static pid_t spid[2];
 	spid[0]=pid; spid[1]=0;
-	PROCTAB* proc = openproc(PROC_FILLCOM | PROC_FILLSTAT | PROC_PID, spid);
+	PROCTAB* proc = openproc(PROC_FILLSTAT | PROC_FILLCOM | PROC_PID, spid);
 	// On wheezy the freeproc() function is present in libprocps header but not lib
 	//  so we use a static structure to workaround memory leak...
 	static proc_t proc_info;
@@ -204,6 +202,20 @@ proc_t* read_procinfo(pid_t pid)
 		return &proc_info;
 	else
 		return 0;
+}
+
+// gather information form already running processes at monitor startup
+void init_running_processes()
+{
+	proc_t** proctab = readproctab(PROC_FILLSTAT | PROC_FILLCOM);
+	//while (likely((res=readproc(proc, &proc_info))))
+	for (proc_t** proc_info=proctab;*proc_info;++proc_info)
+		if (!strcmp((*proc_info)->cmd,"postgres"))
+			if ((*proc_info)->ppid!=1)
+				pgprocs.insert(std::pair<pid_t,pgprocinfo>((*proc_info)->tid,(*proc_info)));
+			//else
+				// this is the master backend process
+	//freeproctab(proctab); // this one also missing in Wheezy's libprocps...
 }
 
 // On fork event, we add the process to the list of processes to monitor,
@@ -219,7 +231,6 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	if (unlikely(!proc_info)) return;  // short lived unknown parent process, unrelated to postgres unless main backend stopped
 	if (strcmp(proc_info->cmd,"postgres")) return;
 
-	// Then check that child process name is postgres too
 	if (unlikely(!read_procinfo(child_pid)))
 	{
 		// short lived process forked by a postgres process
@@ -344,32 +355,36 @@ int main(int argc, const char *argv[])
     int nl_sock;
     int rc = EXIT_SUCCESS;
 
-    signal(SIGINT, &on_sigint);
-    siginterrupt(SIGINT, true);
 	
 	sup_millis=getmillis();
 	time(&sup_time);
+	
+	init_running_processes();
+
+	signal(SIGINT, &on_sigint);
+	siginterrupt(SIGINT, true);
+	
 	if (outlev>=VL_RESULTS_COMPACT)
 	{
 		struct tm *tp=localtime(&sup_time);
 		printf("START %04d-%02d-%02d %02d:%02d:%02d\n",tp->tm_year+1900,tp->tm_mon+1,tp->tm_mday,tp->tm_hour,tp->tm_min,tp->tm_sec);
 	}
 
-    nl_sock = nl_connect();
-    if (nl_sock == -1)
-        exit(EXIT_FAILURE);
+	nl_sock = nl_connect();
+	if (nl_sock == -1)
+		exit(EXIT_FAILURE);
 
-    rc = set_proc_ev_listen(nl_sock, true);
-    if (rc == -1) {
-        rc = EXIT_FAILURE;
-        goto out;
-    }
+	rc = set_proc_ev_listen(nl_sock, true);
+	if (rc == -1) {
+		rc = EXIT_FAILURE;
+		goto out;
+	}
 
-    rc = main_loop(nl_sock);
-    if (rc == -1) {
-        rc = EXIT_FAILURE;
-        goto out;
-    }
+	rc = main_loop(nl_sock);
+	if (rc == -1) {
+		rc = EXIT_FAILURE;
+		goto out;
+	}
 
 	set_proc_ev_listen(nl_sock, false);
 
