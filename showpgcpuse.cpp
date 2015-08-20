@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <algorithm>
 
 using std::string; using std::cout; using std::endl; using std::map; using std::vector;
 
@@ -45,7 +46,7 @@ void disp_stat(const string& title, const map<string,long long>& ventil)
 	long long tot=total_for(ventil);
 	for (auto const &it: ventil)
 	{
-		cout << it.first << "\t" << it.second << "\t" << (it.second*100)/tot << "%" << endl;
+		printf("%s %8llu ms %2llu%%\n",(it.first+"                  ").substr(0,18).c_str(),it.second,(it.second*100)/tot);
 	}
 	cout << endl;
 }
@@ -54,6 +55,7 @@ int main(int argc, const char *argv[])
 {
 	if (argc<2) { printf("syntax: %s <stats_file>\n",argv[0]); return 1; }
 	std::ifstream in(argv[1]);
+	long long maxts=0;
 	map<string,long long> cpu_by_db, cpu_by_user, cpu_by_from;
 	long long cpu_total=0;
 	map<string,unsigned int> proc_by_db, proc_by_user, proc_by_from;
@@ -67,11 +69,12 @@ int main(int argc, const char *argv[])
 		{
 			//cout << ">" << line << "<" << endl;
 			vector<string> fld=explode(line,"\t");
-			if (fld.size()>=7)
+			if ((line[0]>='0') && (line[0]<='9') && (fld.size()>=7))
 			{
 				string db=fld[4],user=fld[5],from=fld[6];
+				maxts=std::max(maxts,atoll(fld[2].c_str()));
 				//cout << "db=" << db << "user=" << user << endl;
-				long long cpused=atoll(fld[3].c_str());
+				long long cpused=atoll(fld[3].c_str())+5;
 				cpu_by_db[db]+=cpused; cpu_by_user[user]+=cpused; cpu_by_from[from]+=cpused;
 				++proc_by_db[db]; ++proc_by_user[user]; ++proc_by_from[from];
 				cpu_total+=cpused; ++proc_total;
@@ -81,6 +84,7 @@ int main(int argc, const char *argv[])
 	disp_stat("CPU BY DB:",cpu_by_db);
 	disp_stat("CPU BY USER:",cpu_by_user);
 	disp_stat("CPU BY ORIGIN:",cpu_by_from);
+	cout << "Total CPU USED: " << ((float)cpu_total/1000) << " s (avg " << ((float)((cpu_total*1000)/maxts)/10) << "% during " << ((float)maxts/1000) << " s)" << endl;
 	//TODO: total cpu time
 
 	return 0;
