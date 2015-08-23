@@ -345,6 +345,16 @@ static int main_loop(int nl_sock)
     return 0;
 }
 
+void treat_remaining_processes()
+{
+	for (auto &it: pgprocs)
+	{
+		it.second.update_from(read_procinfo(it.first));
+		it.second.mark_stop();	// TODO: Change if we want to differentiate processes still running after monitor stop
+		it.second.output_data();
+	}
+}
+
 static void on_sigint(int unused)
 {
     need_exit = true;
@@ -390,5 +400,8 @@ int main(int argc, const char *argv[])
 
 out:
     close(nl_sock);
+	
+	treat_remaining_processes();
+	
     exit(rc);
 }
