@@ -50,28 +50,34 @@ std::vector<string> explode( const string& s, const string& separ ) {
 	return resu;
 }
 
+#define PG_MASTER ('@')
+#define PG_MASTER_AND_CHILDS ('%')
+
 class pgprocinfo {
 	public:
 		//pgprocinfo() {};
-		pgprocinfo(pid_t in_pid);
-		pgprocinfo(proc_t* proc_info);
+		//pgprocinfo(pid_t in_pid, char in_special=0);
+		pgprocinfo(proc_t* proc_info, char in_special=0);
 		pid_t pid;
+		char special=0;
 		bool cx_ident=false;
-		unsigned long long cputime=0,cputime_before=0;
+		unsigned long long cputime=0,cputime_before;
 		int64_t start_time,stop_time=0;
 		string db,user,from;
 		bool update_from(proc_t* proc_info);
 		bool output_data() const;
 		void mark_stop();
+		void debug_out() const;
 };
 
 // For processes we get a start notification, get millisecond resolution time
-pgprocinfo::pgprocinfo(pid_t in_pid):pid(in_pid),start_time(getmillis()-sup_millis) {};
+//pgprocinfo::pgprocinfo(pid_t in_pid, char in_special):pid(in_pid),special(in_special),start_time(getmillis()-sup_millis) {};
 
 // For processes started before, we extract the start time (seconds) from proc_info struct
 //  nope => we store how much CPU was used before monitoring and use start_time=0;
 // and we do the update_from procinfo now
-pgprocinfo::pgprocinfo(proc_t* proc_info):pid(proc_info->tid),start_time(0),cputime_before(proc_info->stime+proc_info->utime)
+pgprocinfo::pgprocinfo(proc_t* proc_info, char in_special):pid(proc_info->tid),special(in_special),start_time(getmillis()-sup_millis),
+	cputime_before((in_special!=PG_MASTER_AND_CHILDS?proc_info->stime+proc_info->utime:proc_info->cstime+proc_info->cutime)*10)
 {
 	update_from(proc_info);
 }
@@ -80,7 +86,7 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 {
 	if (unlikely(!proc_info)) return false;
 	
-	if (!cx_ident)	// process with not yet identified user/db/ip origin => we parse cmdline
+	if (!cx_ident && !special)	// process with not yet identified user/db/ip origin => we parse cmdline
 	{
 		if (likely(proc_info->cmdline)) {
 			std::vector<string> args=explode(*proc_info->cmdline," ");
@@ -101,26 +107,35 @@ bool pgprocinfo::update_from(proc_t* proc_info)
 	}
 	
 	// Update CPU time
-	cputime=(proc_info->stime+proc_info->utime)*10;
+	cputime=((likely(special!=PG_MASTER_AND_CHILDS))?proc_info->stime+proc_info->utime:proc_info->cstime+proc_info->cutime)*10;
 	
 	return true;
 }
 
 bool pgprocinfo::output_data() const
 {
-	if (cx_ident)
+	if (cx_ident || special)
 		if (likely(outlev>=VL_RESULTS_COMPACT))
 			if (likely(outlev==VL_RESULTS_COMPACT))
-				printf("%u\t%ld\t%ld\t%llu\t%s\t%s\t%s\n",pid,start_time,stop_time,cputime,db.c_str(),user.c_str(),from.c_str());
+			{
+				if (special) printf("%c",special);
+				printf("%u\t%ld\t%ld\t%llu\t%s\t%s\t%s\n",pid,start_time,stop_time,cputime-cputime_before,db.c_str(),user.c_str(),from.c_str());
+			}
 			else
-				printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime-cputime_before,db.c_str(),user.c_str(),from.c_str());
+				if (!special) printf("PID %u consumed %llu ms CPU on %s, user %s from %s\n",pid,cputime-cputime_before,db.c_str(),user.c_str(),from.c_str());
 		
 	return cx_ident;
 }
 
 void pgprocinfo::mark_stop() { stop_time=getmillis()-sup_millis; }
 
+void pgprocinfo::debug_out() const
+{
+	printf("PID %u: start_time=%ld, stop_time=%ld, cputime=%llu, cputime_before=%llu\n",pid,start_time,stop_time,cputime,cputime_before);
+}
+
 std::map<pid_t,pgprocinfo> pgprocs;		// map of tracked processes
+pgprocinfo *master,*master_and_childs;
 
 /*
  * connect to netlink
@@ -213,8 +228,11 @@ void init_running_processes()
 		if (!strcmp((*proc_info)->cmd,"postgres"))
 			if ((*proc_info)->ppid!=1)
 				pgprocs.insert(std::pair<pid_t,pgprocinfo>((*proc_info)->tid,(*proc_info)));
-			//else
-				// this is the master backend process
+			else
+			{	// master backend process
+				master=new pgprocinfo(*proc_info,PG_MASTER);
+				master_and_childs=new pgprocinfo(*proc_info,PG_MASTER_AND_CHILDS);
+			}
 	//freeproctab(proctab); // this one also missing in Wheezy's libprocps...
 }
 
@@ -231,7 +249,8 @@ void handle_fork_ev(struct proc_event &proc_ev)
 	if (unlikely(!proc_info)) return;  // short lived unknown parent process, unrelated to postgres unless main backend stopped
 	if (strcmp(proc_info->cmd,"postgres")) return;
 
-	if (unlikely(!read_procinfo(child_pid)))
+	proc_info=read_procinfo(child_pid);
+	if (unlikely(!proc_info))
 	{
 		// short lived process forked by a postgres process
 		if (unlikely(outlev>=VL_ADDINFO)) printf("# fork.child_pid %u: Couldn't read procinfo\n",child_pid);
@@ -243,12 +262,11 @@ void handle_fork_ev(struct proc_event &proc_ev)
 		if (outlev>=VL_WARN) printf("# (CAN'T HAPPEN!) postgres %u forked (changed cmd): %u %s\n",parent_pid,child_pid,proc_info->cmd);
 		return;
 	}
-	pgprocinfo newpgproc(child_pid);
 	
 	// Create the process information object into processes map
 	//pgprocs[child_pid]=pgprocinfo(child_pid);	// clean syntax but unfortunately inefficient in C++
 	//pgprocs.emplace(std::piecewise_construct, std::make_tuple(child_pid), std::make_tuple(child_pid, child_pid)); // total ivory tower brainfuck...
-	pgprocs.insert(std::pair<pid_t,pgprocinfo>(child_pid,child_pid));
+	pgprocs.insert(std::pair<pid_t,pgprocinfo>(child_pid,proc_info));
 }
 
 // Handle exit event
@@ -353,6 +371,8 @@ void treat_remaining_processes()
 		it.second.mark_stop();	// TODO: Change if we want to differentiate processes still running after monitor stop
 		it.second.output_data();
 	}
+	if (master) { master->update_from(read_procinfo(master->pid)); master->mark_stop(); master->output_data(); }
+	if (master_and_childs) { master_and_childs->update_from(read_procinfo(master_and_childs->pid)); master_and_childs->mark_stop(); master_and_childs->output_data(); }
 }
 
 static void on_sigint(int unused)
